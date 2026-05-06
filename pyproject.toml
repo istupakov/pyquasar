@@ -1,19 +1,40 @@
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.11.8,<0.12"]
+build-backend = "uv_build"
 
 [project]
 name = "pyquasar"
 version = "0.1.0"
-dependencies = ["numpy", "scipy", "gmsh"]
-authors = [
-  { name="Ilya Stupakov", email="istupakov@gmail.com" },
-]
+authors = [{ name = "Ilya Stupakov", email = "istupakov@gmail.com" }]
 description = "Finite and boundary element methods on Python"
 readme = "README.md"
-requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+dependencies = ["gmsh>=5.0.0.dev1", "numpy>=2.4.4", "scipy>=1.17.1"]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
 ]
+
+[dependency-groups]
+dev = [
+    "ipykernel<7",
+    "ipywidgets>=8.1.8",
+    "matplotlib>=3.10.8",
+    "nbstripout>=0.9.1",
+    "pytest>=9.0.1",
+    "ruff>=0.15.12",
+]
+
+[tool.ruff]
+target-version = "py314"
+src = ["src"]
+
+[[tool.uv.index]]
+url = "https://gmsh.info/python-packages-dev-nox"

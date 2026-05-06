@@ -1,0 +1,13 @@
+{
+    "files.exclude": {
+        "**/__pycache__": true,
+        ".ruff_cache": true,
+        ".pytest_cache": true
+    },
+    "jupyter.notebookFileRoot": "${workspaceFolder}",
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
+}
