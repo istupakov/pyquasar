@@ -29,12 +29,46 @@ dev = [
     "matplotlib>=3.10.8",
     "nbstripout>=0.9.1",
     "pytest>=9.0.1",
+    "pytest-cov>=7.1.0",
     "ruff>=0.15.12",
+    "ty>=0.0.31",
 ]
 
 [tool.ruff]
 target-version = "py314"
 src = ["src"]
+extend-exclude = ["examples/*.ipynb"]
+
+[tool.ruff.lint]
+select = ["B", "D", "E", "F", "I", "NPY", "SIM", "UP"]
+ignore = [
+    "B011", # Keep numerical convergence assertions compact for now.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B007", "B905", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ty.environment]
+python-version = "3.14"
+root = ["./src"]
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.rules]
+all = "warn"
+
+[[tool.ty.overrides]]
+include = ["tests/**"]
+
+[tool.ty.overrides.rules]
+division-by-zero = "ignore"
 
 [[tool.uv.index]]
 url = "https://gmsh.info/python-packages-dev-nox"
+
+[tool.coverage.run]
+source = ["src"]

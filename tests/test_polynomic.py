@@ -5,7 +5,6 @@ import pytest
 
 from pyquasar import BemDomain, FemDomain, FetiProblem, load_mesh
 
-
 TEST_GEO = Path(__file__).resolve().parents[1] / "examples" / "test.geo"
 PRECONDITIONER_Q_CASES = [
     ("I", "I"),

@@ -1,21 +1,44 @@
-import numpy as np
-from scipy import sparse
-from scipy.integrate import quad_vec, fixed_quad
+"""Boundary-element integration helpers for two-dimensional line elements."""
 
+from collections.abc import Callable
+from typing import cast
+
+import numpy as np
+from numpy.typing import ArrayLike
+from scipy import sparse
+from scipy.integrate import fixed_quad, quad_vec
+
+from ._typing import FieldFunction, FloatArray, Shape
 from .fem import FemLine2
 
 
 class BemLine2(FemLine2):
-    def __init__(self, elem_vert, elements, quad, weight):
+    """Two-node line boundary element for Laplace-type potentials."""
+
+    def __init__(
+        self,
+        elem_vert: ArrayLike,
+        elements: ArrayLike,
+        quad: ArrayLike,
+        weight: ArrayLike,
+    ) -> None:
         super().__init__(elem_vert, elements, quad, weight)
         self.basis_func = [
             lambda t: np.array([np.ones_like(t)]),
             lambda t: np.array([1 - t, t]),
             lambda t: np.array([1 - t**2, t**2]),
         ]
-        self.basis_indices = [np.arange(len(elements))[:, None], elements, elements]
+        self.basis_indices = [
+            np.arange(len(self.elements))[:, None],
+            self.elements,
+            self.elements,
+        ]
 
-    def potentials(self, points):
+    def potentials(
+        self, points: ArrayLike
+    ) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray, FloatArray]:
+        """Evaluate single-, double-, and Newton-potential kernels at points."""
+        points = np.asarray(points)
         dr = points[..., None, :] - self.center
         l = self.J.flatten()  # noqa: E741
         a = np.sum(self.dir * dr, axis=-1) / l
@@ -43,7 +66,10 @@ class BemLine2(FemLine2):
 
         return slpot, slpot_t, dlpot, dlpot_t, nwpot
 
-    def mass_matrix(self, shape, row_basis_order=1, col_basis_order=1):
+    def mass_matrix(
+        self, shape: Shape, row_basis_order: int = 1, col_basis_order: int = 1
+    ) -> sparse.coo_array:
+        """Assemble a boundary-element mass matrix for selected bases."""
         row_basis = self.basis_func[row_basis_order](self.quad[:, 0])
         col_basis = self.basis_func[col_basis_order](self.quad[:, 0])
         data = self.J[:, None] * (
@@ -53,18 +79,19 @@ class BemLine2(FemLine2):
         j = np.broadcast_to(self.basis_indices[col_basis_order][:, :, None], data.shape)
         return sparse.coo_array((data.flat, (i.flat, j.flat)), shape)
 
-    def load_vector(self, func, shape, basis_order=1):
+    def load_vector(
+        self,
+        func: Callable[[ArrayLike, ArrayLike], ArrayLike] | ArrayLike,
+        shape: Shape,
+        basis_order: int = 1,
+    ) -> FloatArray:
+        """Assemble a boundary-element load vector for the selected basis."""
         basis = self.basis_func[basis_order](self.quad[:, 0])
         if callable(func):
-            f = func(
+            f = cast(FieldFunction, func)(
                 self.center[:, None] + self.quad[None, :, 0, None] * self.dir[:, None],
                 self.normal[:, None],
             )
-            # def f(t):
-            #   basis = self.basis_func[basis_order](t)
-            #   f = func(self.center[:, None] + t[None, :, None] * self.dir[:, None], self.normal[:, None])
-            #   return basis * f[:, None]
-            # data = self.J * fixed_quad(f, 0, 1, n = 10)[0]
         else:
             f = func
         data = self.J * ((basis * np.atleast_1d(f)[:, None]) @ self.weight)
@@ -72,7 +99,10 @@ class BemLine2(FemLine2):
         np.add.at(res, self.basis_indices[basis_order], data)
         return res
 
-    def bem_matrices(self, quadrature_order=None):
+    def bem_matrices(
+        self, quadrature_order: int | None = None
+    ) -> tuple[FloatArray, FloatArray, FloatArray]:
+        """Assemble single-layer, double-layer, and hypersingular matrices."""
         inv = np.empty_like(self.basis_indices[1].T)
         inv[0, self.basis_indices[1][:, 0]] = np.arange(len(self.basis_indices[1]))
         inv[1, self.basis_indices[1][:, 1]] = np.arange(len(self.basis_indices[1]))
@@ -84,7 +114,7 @@ class BemLine2(FemLine2):
             dlpot_psi = np.take(dlpot - dlpot_t, inv[0], axis=-1) + np.take(
                 dlpot_t, inv[1], axis=-1
             )
-            return np.moveaxis((slpot, dlpot_psi), 1, -1)
+            return np.moveaxis(np.asarray((slpot, dlpot_psi)), 1, -1)
 
         V, K = self.J * (
             quad_vec(f, 0, 1)[0][..., 0]
@@ -98,7 +128,8 @@ class BemLine2(FemLine2):
 
         return V, K, D
 
-    def bem_matrices_p(self, order=None):
+    def bem_matrices_p(self, order: int | None = None) -> tuple[FloatArray, FloatArray]:
+        """Assemble potential matrices for preconditioning."""
         inv = np.empty_like(self.basis_indices[1].T)
         inv[0, self.basis_indices[1][:, 0]] = np.arange(len(self.basis_indices[1]))
         inv[1, self.basis_indices[1][:, 1]] = np.arange(len(self.basis_indices[1]))
@@ -110,7 +141,9 @@ class BemLine2(FemLine2):
             slpot_psi = np.take(slpot - slpot_t, inv[0], axis=-1) + np.take(
                 slpot_t, inv[1], axis=-1
             )
-            return np.moveaxis([(1 - t) * slpot_psi, t * slpot_psi, t * slpot_t], 1, -1)
+            return np.moveaxis(
+                np.asarray([(1 - t) * slpot_psi, t * slpot_psi, t * slpot_t]), 1, -1
+            )
 
         pot = self.J * (
             quad_vec(f, 0, 1)[0][..., 0]
@@ -126,7 +159,10 @@ class BemLine2(FemLine2):
 
         return Vp, Dp
 
-    def result_weights(self, points):
+    def result_weights(
+        self, points: ArrayLike
+    ) -> tuple[FloatArray, FloatArray, FloatArray]:
+        """Return post-processing weights for potential evaluation at points."""
         inv = np.empty_like(self.basis_indices[1].T)
         inv[0, self.basis_indices[1][:, 0]] = np.arange(len(self.basis_indices[1]))
         inv[1, self.basis_indices[1][:, 1]] = np.arange(len(self.basis_indices[1]))
@@ -137,7 +173,8 @@ class BemLine2(FemLine2):
         )
         return slpot, dlpot_psi, np.sum(nwpot, axis=-1)
 
-    def newton(self, points, trace=0):
+    def newton(self, points: ArrayLike, trace: int = 0) -> FloatArray:
+        """Evaluate the Newton potential or its vector trace at points."""
         slpot, slpot_t, dlpot, dlpot_t, nwpot = self.potentials(points)
         return (
             np.sum(nwpot, axis=-1)

@@ -1,13 +1,33 @@
+"""FETI domain-decomposition solvers for pyquasar domains."""
+
+from collections.abc import Sequence
+from typing import Any
+
 import numpy as np
 from scipy import sparse
 
+from ._typing import Array, FloatArray, Materials
+
 
 class FetiProblem:
-    def __init__(self, domains, dim=2):
+    """Finite Element Tearing and Interconnecting problem over subdomains."""
+
+    def __init__(self, domains: Sequence[Any], dim: int = 2) -> None:
+        """Create a FETI problem from assembled-capable domains.
+
+        Parameters
+        ----------
+        domains
+            FEM or BEM domain objects sharing a global skeleton.
+        dim
+            Spatial dimension. The current implementation infers it from the
+            first domain and keeps this argument for backward compatibility.
+        """
         self.domains = domains
         self.dim = domains[0].vertices.shape[-1]
 
-    def build_constraints(self, links, constraints):
+    def build_constraints(self, links: Array, constraints: list[list[tuple]]) -> None:
+        """Append dual continuity constraints for one skeleton connection row."""
         idx = np.nonzero(links >= 0)[0]
         if idx[0] == 0:
             for j in idx[1:]:
@@ -22,7 +42,8 @@ class FetiProblem:
                     constraints[j - 1].append((self.dual_size, links[j], -1))
                     self.dual_size += 1
 
-    def assembly_constraints(self, dirichlet_name):
+    def assembly_constraints(self, dirichlet_name: str) -> None:
+        """Build Boolean interface-constraint matrices for all domains."""
         max_index = max(domain.boundary_indices.max() for domain in self.domains)
         connections = np.full((max_index + 1, len(self.domains) + 1), -1, dtype=int)
 
@@ -52,7 +73,7 @@ class FetiProblem:
             self.build_constraints(links, constraints)
 
         self.B = []
-        for constraint, domain in zip(constraints, self.domains):
+        for constraint, domain in zip(constraints, self.domains, strict=True):
             i, j, v = np.array(constraint).T
             self.B.append(
                 sparse.coo_array(
@@ -60,15 +81,17 @@ class FetiProblem:
                 ).tocsr()
             )
 
-    def condition_number_estimate(self):
+    def condition_number_estimate(self) -> float:
+        """Estimate the FETI condition-number factor from domain diameters."""
         return np.log1p(max(d.diameter[0] / d.diameter[1] for d in self.domains)) ** 2
 
-    def assembly_scaling(self):
+    def assembly_scaling(self) -> tuple[sparse.dia_array, list[sparse.csr_array]]:
+        """Assemble jump scaling matrices for the selected preconditioner."""
         jumps = np.full((self.dual_size, 2), np.inf)
         q = np.full(self.dual_size, np.inf)
         scaling = np.zeros(self.boundary_types.shape)
         Bcoo = [B.tocoo() for B in self.B]
-        for domain, B in zip(self.domains, Bcoo):
+        for domain, B in zip(self.domains, Bcoo, strict=True):
             scaling[domain.boundary_indices] += domain.scaling
             jumps[B.row, 1 * (B.data == -1)] = domain.scaling[B.col]
             H, h = domain.diameter
@@ -86,7 +109,7 @@ class FetiProblem:
 
         Q = sparse.diags(q * np.min(jumps, axis=-1))
         Bs = []
-        for domain, B in zip(self.domains, Bcoo):
+        for domain, B in zip(self.domains, Bcoo, strict=True):
             val = (
                 jumps[B.row, 1 * (B.data == 1)]
                 / scaling[domain.boundary_indices[B.col]]
@@ -98,7 +121,13 @@ class FetiProblem:
             )
         return Q, Bs
 
-    def add_skeleton_projection(self, func, material_filter, grad=False):
+    def add_skeleton_projection(
+        self,
+        func: Any,
+        material_filter: dict[str | None, set[str | None]],
+        grad: bool = False,
+    ) -> FloatArray:
+        """Project prescribed skeleton values and subtract them from the right side."""
         size = self.boundary_types.size
         proj_matrix = sparse.coo_array((size, size))
         proj_vector = np.zeros(size)
@@ -135,13 +164,14 @@ class FetiProblem:
         )
         assert exit == 0
 
-        for domain, B in zip(self.domains, self.B):
+        for domain, B in zip(self.domains, self.B, strict=True):
             if domain.material in material_filter:
                 self.g -= B[:, : domain.ext_dof_count] @ proj[domain.boundary_indices]
 
         return proj
 
-    def assembly(self, dirichlet_name, materials):
+    def assembly(self, dirichlet_name: str, materials: Materials) -> None:
+        """Assemble all domains and FETI coarse-grid coupling data."""
         self.assembly_constraints(dirichlet_name)
 
         for domain in self.domains:
@@ -161,7 +191,7 @@ class FetiProblem:
         self.G = sparse.hstack(
             [
                 sparseMult(B.tocoo(), domain.kernel)
-                for (domain, B) in zip(self.domains, self.B)
+                for (domain, B) in zip(self.domains, self.B, strict=True)
             ],
             format="csr",
         )
@@ -169,38 +199,45 @@ class FetiProblem:
         self.g = np.zeros(self.dual_size)
         self.primal_size = self.e.size
 
-    def decompose(self):
+    def decompose(self) -> None:
+        """Prepare local domain factorizations used by iterative solves."""
         for domain in self.domains:
             domain.decompose()
 
-    def project(self, _lambda):
+    def project(self, _lambda: Array) -> FloatArray:
+        """Apply the FETI primal-space projection."""
         return _lambda - self.Q @ (self.G @ (self.Coarse @ (self.G.T @ _lambda)))
 
-    def projectT(self, _lambda):
+    def projectT(self, _lambda: Array) -> FloatArray:
+        """Apply the transpose FETI primal-space projection."""
         return _lambda - self.G @ (self.Coarse @ (self.G.T @ (self.Q @ _lambda)))
 
-    def residual(self, _lambda):
+    def residual(self, _lambda: Array) -> FloatArray:
+        """Evaluate the projected interface residual for a multiplier vector."""
         r = self.g.copy()
-        for domain, B in zip(self.domains, self.B):
+        for domain, B in zip(self.domains, self.B, strict=True):
             r += B @ domain.solve_neumann(domain.load_vector - B.T @ _lambda)
         return r
 
-    def operator(self, _lambda):
+    def operator(self, _lambda: Array) -> FloatArray:
+        """Apply the FETI interface operator."""
         r = np.zeros_like(_lambda)
-        for domain, B in zip(self.domains, self.B):
+        for domain, B in zip(self.domains, self.B, strict=True):
             r += B @ domain.solve_neumann(B.T @ _lambda)
         return r
 
-    def preconditioner(self, _lambda, lumped):
+    def preconditioner(self, _lambda: Array, lumped: bool) -> FloatArray:
+        """Apply Dirichlet or lumped-Dirichlet preconditioning."""
         r = np.zeros_like(_lambda)
-        for domain, Bs in zip(self.domains, self.Bs):
+        for domain, Bs in zip(self.domains, self.Bs, strict=True):
             r += Bs @ domain.solve_dirichlet(Bs.T @ _lambda, lumped)
         return r
 
-    def solutions(self, _lambda):
+    def solutions(self, _lambda: Array) -> list[FloatArray]:
+        """Recover per-domain primal solutions from interface multipliers."""
         solutions = []
         r = self.g.copy()
-        for domain, B in zip(self.domains, self.B):
+        for domain, B in zip(self.domains, self.B, strict=True):
             x = domain.solve_neumann(domain.load_vector - B.T @ _lambda)
             r += B @ x
             solutions.append(x)
@@ -210,10 +247,13 @@ class FetiProblem:
         )
         return [
             domain.calc_solution(x + a @ domain.kernel)
-            for x, a, domain in zip(solutions, alpha_split, self.domains)
+            for x, a, domain in zip(solutions, alpha_split, self.domains, strict=True)
         ]
 
-    def prepare(self, precond, Q):
+    def prepare(
+        self, precond: str, Q: str
+    ) -> tuple[sparse.linalg.LinearOperator, sparse.linalg.LinearOperator]:
+        """Build the projected operator and preconditioner for CG."""
         if precond == "I":
 
             def precond_func(x):
@@ -253,7 +293,10 @@ class FetiProblem:
         )
         return A, M
 
-    def solve(self, precond="Dirichlet", Q="Diag", tol=1e-7):
+    def solve(
+        self, precond: str = "Dirichlet", Q: str = "Diag", tol: float = 1e-7
+    ) -> list[FloatArray]:
+        """Solve the decomposed problem and return one solution per domain."""
         i = 0
 
         def count_iter(x):
@@ -277,7 +320,10 @@ class FetiProblem:
 
 
 class FetiProblemNotRed(FetiProblem):
-    def build_constraints(self, links, constraints):
+    """Non-redundant FETI constraint variant."""
+
+    def build_constraints(self, links: Array, constraints: list[list[tuple]]) -> None:
+        """Append one-sided dual constraints for one skeleton connection row."""
         idx = np.nonzero(links >= 0)[0]
         if idx[0] == 0:
             for j in idx[1:]:
@@ -292,12 +338,13 @@ class FetiProblemNotRed(FetiProblem):
                     constraints[j - 1].append((self.dual_size, links[j], -1))
                     self.dual_size += 1
 
-    def assembly_scaling(self):
+    def assembly_scaling(self) -> tuple[sparse.dia_array, list[sparse.csr_array]]:
+        """Assemble non-redundant jump scaling matrices."""
         jumps = np.full((self.dual_size, 2), np.inf)
         q = np.full(self.dual_size, np.inf)
         scaling = np.zeros(self.boundary_types.shape)
         Bcoo = [B.tocoo() for B in self.B]
-        for domain, B in zip(self.domains, Bcoo):
+        for domain, B in zip(self.domains, Bcoo, strict=True):
             scaling[domain.boundary_indices] += domain.scaling
             jumps[B.row, 1 * (B.data == -1)] = domain.scaling[B.col]
             H, h = domain.diameter
@@ -315,7 +362,7 @@ class FetiProblemNotRed(FetiProblem):
 
         Q = sparse.diags(q * np.min(jumps, axis=-1))
         Bd = []
-        for domain, B in zip(self.domains, Bcoo):
+        for domain, B in zip(self.domains, Bcoo, strict=True):
             val = domain.scaling[B.col] / scaling[domain.boundary_indices[B.col]]
             Bd.append(
                 sparse.coo_array(

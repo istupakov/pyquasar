@@ -1,10 +1,37 @@
-import numpy as np
+"""Load Gmsh models into pyquasar domain data structures."""
+
+from collections.abc import Iterable
+
 import gmsh
+import numpy as np
+
+from ._typing import DomainData
 
 
-def load_mesh(filename, numPart=0, refineK=0):
-    def create_domain(dim, tag):
-        def get_material(dim, tag):
+def load_mesh(
+    filename: str, numPart: int = 0, refineK: int = 0
+) -> Iterable[DomainData]:
+    """Load and optionally partition a Gmsh mesh into pyquasar domains.
+
+    Parameters
+    ----------
+    filename
+        Path to a Gmsh ``.geo`` or mesh file.
+    numPart
+        Number of mesh partitions to request from Gmsh. ``0`` leaves the mesh
+        unpartitioned.
+    refineK
+        Number of uniform mesh refinement steps to apply before partitioning.
+
+    Yields
+    ------
+    DomainData
+        Material name, boundary indices, vertices, element blocks, and boundary
+        blocks for each domain entity.
+    """
+
+    def create_domain(dim: int, tag: int) -> DomainData:
+        def get_material(dim: int, tag: int) -> str | None:
             physicalTags = gmsh.model.getPhysicalGroupsForEntity(dim, tag)
             assert len(physicalTags) <= 1
             return (
@@ -13,8 +40,10 @@ def load_mesh(filename, numPart=0, refineK=0):
                 else None
             )
 
-        def create_block(dim, tag):
-            for elemType, _, elemNodeTag in zip(*gmsh.model.mesh.getElements(dim, tag)):
+        def create_block(dim: int, tag: int):
+            for elemType, _, elemNodeTag in zip(
+                *gmsh.model.mesh.getElements(dim, tag), strict=True
+            ):
                 elemName, _, _, numNodes, *_ = gmsh.model.mesh.getElementProperties(
                     elemType
                 )
@@ -48,8 +77,6 @@ def load_mesh(filename, numPart=0, refineK=0):
         boundaries = []
         for bdim, btag in gmsh.model.getBoundary([(dim, tag)], oriented=True):
             blocks = list(create_block(bdim, abs(btag)))
-            # print(bdim, btag, gmsh.model.getType(bdim, abs(btag)), gmsh.model.getParent(bdim, abs(btag)),
-            #      gmsh.model.getPartitions(bdim, abs(btag)), gmsh.model.getPhysicalGroupsForEntity(bdim, abs(btag)), len(blocks))
             assert len(blocks) > 0, (dim, tag)
             boundaries.append((get_material(bdim, abs(btag)), btag, blocks))
 
@@ -66,7 +93,7 @@ def load_mesh(filename, numPart=0, refineK=0):
         if filename.endswith(".geo"):
             gmsh.model.mesh.generate(gmsh.model.getDimension())
 
-        for i in range(refineK):
+        for _ in range(refineK):
             gmsh.model.mesh.refine()
         gmsh.model.mesh.partition(numPart)
         # gmsh.write(f'{gmsh.model.getCurrent()}.msh')
@@ -85,8 +112,6 @@ def load_mesh(filename, numPart=0, refineK=0):
                 partitions = gmsh.model.getPartitions(dim, tag)
                 if not len(partitions):
                     continue
-            # print(dim, tag, gmsh.model.getType(dim, tag), gmsh.model.getPartitions(dim, tag),
-            #      gmsh.model.getAdjacencies(dim, tag), gmsh.model.getPhysicalGroupsForEntity(dim, tag))
             yield create_domain(dim, tag)
     finally:
         gmsh.clear()

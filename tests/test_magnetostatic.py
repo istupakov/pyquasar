@@ -5,7 +5,6 @@ import pytest
 
 from pyquasar import FemDomain, FetiProblem, load_mesh
 
-
 CIRCULAR_CURRENT_GEO = (
     Path(__file__).resolve().parents[1] / "examples" / "circular_current.geo"
 )
